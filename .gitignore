@@ -1,0 +1,9 @@
+# 构建产物
+AirPodsMotion.app/
+*.o
+*.dSYM/
+
+# 第三方 app 截图,非本项目产物,不发布
+refs/
+
+.DS_Store
