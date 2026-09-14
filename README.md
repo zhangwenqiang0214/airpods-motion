@@ -20,19 +20,37 @@
 
 构建完从**访达双击** `AirPodsMotion.app`（原因见下方「用法」）。
 
-## ⚠️ 已知问题
+## 踩过的坑:自己把数据流掐死
 
-**在部分环境下拿不到数据流**：`isDeviceMotionAvailable` 返回 `true`、
-运动权限已授予，但 `startDeviceMotionUpdates` 一帧都不投递。
-同一副 AirPods 在 iPhone 上的第三方头部追踪 app 同时段工作正常，
-因此问题定位在 macOS 侧，尚未解决。
+一个值得记下来的失败。为了处理「耳机离线后 CoreMotion 不自愈」，
+加了个看门狗定时重启数据流，结果它自己变成了更严重的故障：
 
-app 内已有诊断手段：数据流看门狗会显示「等待首帧 Ns」并指数退避重试，
-系统日志可用下面这条查看。
-
-```bash
-/usr/bin/log show --predicate 'subsystem == "local.tools.airpodsmotion"' --last 10m --style compact
 ```
+16:34:50.649  start: available=true
+16:34:50.671  耳机已连接                      ← start 之后仅 22 毫秒
+16:34:50.671  reconnect #1 available=true     ← 同一毫秒,流被拆了重建
+   ... reconnect #2 … #44,全程 available=true ...
+16:38:47.097  stop: 共 0 帧, 重连 44 次
+```
+
+`headphoneMotionManagerDidConnect` 在 `startDeviceMotionUpdates` 之后
+22 毫秒就无条件调了重连，把刚建立的流拆掉。**只要这么撕一次，
+CoreMotion 的耳机运动会话就再也起不来** —— 后面 44 次重连全部无效，
+`isDeviceMotionAvailable` 始终是 `true`，回调不报任何错，一帧不来。
+
+修法是给连接回调加去抖，而不是调宽限期：
+
+```swift
+if running, Date().timeIntervalSince(lastRestart) > 10 { reconnect() }
+```
+
+正常情况下**首帧约 1.9 秒到达**。所以看门狗的宽限期必须远大于这个值
+（本项目取 20 秒），重试还要指数退避，否则就是在它吐出第一帧之前
+反复掐死它。
+
+另一个相关的坑:ad-hoc 签名每次重建 cdhash 都会变，TCC 里按代码签名
+匹配的旧授权会对不上号，出现「数据库写着已授权、app 拿到 notDetermined」
+的拧巴状态。`build.sh` 因此每次构建都会 `tccutil reset Motion`。
 
 ## 用法
 
